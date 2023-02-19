@@ -102,20 +102,4 @@ mainChoreo = do
 
 main :: IO ()
 main = do
-  [loc] <- getArgs
-  x <- case loc of
-    "primary" -> runNetwork config "primary" primaryP
-    "worker1" -> runNetwork config "worker1" worker1P
-    "worker2" -> runNetwork config "worker2" worker2P
-  return ()
-  where
-    primaryP = epp mainChoreo "primary"
-    worker1P = epp mainChoreo "worker1"
-    worker2P = epp mainChoreo "worker2"
-
-    config =
-      mkConfig
-        [ ("primary", ("localhost", 4242)),
-          ("worker1", ("localhost", 4343)),
-          ("worker2", ("localhost", 4444))
-        ]
+  runChoreo mainChoreo
