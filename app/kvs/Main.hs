@@ -48,7 +48,7 @@ readRequest = do
             ["PUT", k, v] -> Just (Put k v)
             _ -> Nothing
 
-kvs :: (Request @ "client", IORef State @ "server") -> Choreo IO (Response @ "client", IORef State @ "server")
+kvs :: (Request @ "client", IORef State @ "server") -> Choreo IO (Response @ "client")
 kvs (request, stateRef) = do
   request' <- (client, request) ~> server
   response <-
@@ -59,8 +59,7 @@ kvs (request, stateRef) = do
       Get key -> do
         state <- readIORef (unwrap stateRef)
         return (Map.lookup key state)
-  response' <- (server, response) ~> client
-  return (response', stateRef)
+  (server, response) ~> client
 
 mainChoreo :: Choreo IO ()
 mainChoreo = do
@@ -70,7 +69,7 @@ mainChoreo = do
     loop :: IORef State @ "server" -> Choreo IO ()
     loop stateRef = do
       request <- client `locally` \_ -> readRequest
-      (response, _) <- kvs (request, stateRef)
+      response <- kvs (request, stateRef)
       client `locally` \unwrap -> do putStrLn (show (unwrap response))
       loop stateRef
 
