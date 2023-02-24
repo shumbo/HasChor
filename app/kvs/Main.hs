@@ -11,13 +11,14 @@ import Choreography.Location
 import Choreography.Network.Http
 import Control.Concurrent (threadDelay)
 import Control.Monad
+import Data.IORef
 import Data.Map (Map, (!))
 import Data.Map qualified as Map
 import Data.Maybe (fromMaybe, isJust)
 import Data.Proxy
-import Data.Time
+import GHC.IORef (IORef (IORef))
+import GHC.TypeLits (KnownSymbol)
 import System.Environment
-import System.Exit (exitSuccess)
 
 client :: Proxy "client"
 client = Proxy
@@ -25,77 +26,54 @@ client = Proxy
 server :: Proxy "server"
 server = Proxy
 
-type S = Map String String
+type State = Map String String
 
-data Req = Put String String | Get String deriving (Show, Read)
+data Request = Put String String | Get String deriving (Show, Read)
 
-parseReq :: String -> Maybe Req
-parseReq s =
-  let l = words s
-   in case l of
-        ["GET", k] -> Just (Get k)
-        ["PUT", k, v] -> Just (Put k v)
-        _ -> Nothing
+type Response = Maybe String
 
-kvs :: S @ "server" -> Choreo IO (S @ "server")
-kvs s = do
-  cmdC <-
-    client `locally` \unwrap -> do
-      let loop = do
-            putStrLn "Command?"
-            line <- getLine
-            let x = parseReq line
-             in case x of
-                  Just t -> return t
-                  Nothing -> do
-                    putStrLn "Invalid command"
-                    loop
-      loop
-  cmdS <- (client, cmdC) ~> server
-  x <-
-    server `locally` \unwrap -> case unwrap cmdS of
-      Put k v -> do
-        return $ (Map.insert k v (unwrap s), Just "OK")
-      Get k -> do
-        let e = Map.lookup k (unwrap s)
-         in do
-              return $ (unwrap s, e)
-  s' <- server `locally` \unwrap -> do return $ fst (unwrap x)
-  t <- server `locally` \unwrap -> do return $ snd (unwrap x)
-  t' <- (server, t) ~> client
-  client `locally` \unwrap -> do
-    putStrLn $ show (unwrap t')
-  return s'
+readRequest :: IO Request
+readRequest = do
+  putStrLn "Command?"
+  line <- getLine
+  case parseRequest line of
+    Just t -> return t
+    Nothing -> putStrLn "Invalid command" >> readRequest
+  where
+    parseRequest :: String -> Maybe Request
+    parseRequest s =
+      let l = words s
+       in case l of
+            ["GET", k] -> Just (Get k)
+            ["PUT", k, v] -> Just (Put k v)
+            _ -> Nothing
 
-kvsServer :: Choreo IO ()
-kvsServer = do
-  initS <- server `locally` \unwrap -> return (Map.empty :: S)
-  let loop (s :: S @ "server") = do
-        s' <- kvs s
-        loop s'
-   in loop initS
-  return ()
+kvs :: (Request @ "client", IORef State @ "server") -> Choreo IO (Response @ "client", IORef State @ "server")
+kvs (request, stateRef) = do
+  request' <- (client, request) ~> server
+  response <-
+    server `locally` \unwrap -> case unwrap request' of
+      Put key value -> do
+        modifyIORef (unwrap stateRef) (Map.insert key value)
+        return (Just value)
+      Get key -> do
+        state <- readIORef (unwrap stateRef)
+        return (Map.lookup key state)
+  response' <- (server, response) ~> client
+  return (response', stateRef)
 
-kvsClient :: Choreo IO ()
-kvsClient = do
-  initS <- server `locally` \unwrap -> return (Map.empty :: S)
-  kvs initS
-  -- TODO(shun): program should exit without this
-  client `locally` \unwrap -> do
-    threadDelay 10000 -- without this, the server crashes
-    exitSuccess
-  return ()
+mainChoreo :: Choreo IO ()
+mainChoreo = do
+  stateRef <- server `locally` \_ -> newIORef (Map.empty :: State)
+  loop stateRef
+  where
+    loop :: IORef State @ "server" -> Choreo IO ()
+    loop stateRef = do
+      request <- client `locally` \_ -> readRequest
+      (response, _) <- kvs (request, stateRef)
+      client `locally` \unwrap -> do putStrLn (show (unwrap response))
+      loop stateRef
 
 main :: IO ()
 main = do
-  [loc] <- getArgs
-  x <- case loc of
-    "client" -> runChoreography config kvsClient "client"
-    "server" -> runChoreography config kvsServer "server"
-  return ()
-  where
-    config =
-      mkHttpConfig
-        [ ("client", ("localhost", 5000)),
-          ("server", ("localhost", 5001))
-        ]
+  runChoreo mainChoreo
