@@ -75,10 +75,15 @@ primaryBackupReplicationStrategy (request, (primaryStateRef, backupStateRef)) = 
   cond (primary, m) \case
     True -> do
       request'' <- (primary, request) ~> backup
-      backup `locally` \unwrap -> case unwrap request'' of
-        Put key value -> do
-          modifyIORef (unwrap backupStateRef) (Map.insert key value)
+      ( backup,
+        \unwrap -> case unwrap request'' of
+          Put key value -> do
+            modifyIORef (unwrap backupStateRef) (Map.insert key value)
+            return (Just value)
+        )
+        ~~> primary
       backup `locally` \_ -> do putStrLn "handled relayed request"
+      primary `locally` \_ -> do putStrLn "received ack from backup"
       return ()
     False -> do
       return ()
@@ -129,4 +134,18 @@ noReplicationChoreo = do
 
 main :: IO ()
 main = do
-  runChoreo noReplicationChoreo
+  [loc] <- getArgs
+  case loc of
+    "client" -> runChoreography cfg choreo "client"
+    "primary" -> runChoreography cfg choreo "primary"
+    "backup" -> runChoreography cfg choreo "backup"
+  return ()
+  where
+    choreo = primaryBackupChoreo
+
+    cfg =
+      mkHttpConfig
+        [ ("client", ("localhost", 4242)),
+          ("primary", ("localhost", 4343)),
+          ("backup", ("localhost", 4444))
+        ]
