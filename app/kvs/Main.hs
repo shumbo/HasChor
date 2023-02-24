@@ -56,15 +56,25 @@ readRequest = do
             ["PUT", k, v] -> Just (Put k v)
             _ -> Nothing
 
-kvs :: (Request @ "client", (IORef State @ "primary", IORef State @ "backup")) -> Choreo IO (Response @ "client")
-kvs (request, (primaryStateRef, backupStateRef)) = do
-  request' <- (client, request) ~> primary
+type ReplicationStrategy a = (Request @ "primary", a) -> Choreo IO (Response @ "primary")
 
+noReplicationReplicationStrategy :: ReplicationStrategy (IORef State @ "primary")
+noReplicationReplicationStrategy (request, stateRef) = do
+  primary `locally` \unwrap -> case unwrap request of
+    Put key value -> do
+      modifyIORef (unwrap stateRef) (Map.insert key value)
+      return (Just value)
+    Get key -> do
+      state <- readIORef (unwrap stateRef)
+      return (Map.lookup key state)
+
+primaryBackupReplicationStrategy :: ReplicationStrategy (IORef State @ "primary", IORef State @ "backup")
+primaryBackupReplicationStrategy (request, (primaryStateRef, backupStateRef)) = do
   -- relay request to backup if it is mutating (= PUT)
-  m <- primary `locally` \unwrap -> do return $ isMutation (unwrap request')
+  m <- primary `locally` \unwrap -> do return $ isMutation (unwrap request)
   cond (primary, m) \case
     True -> do
-      request'' <- (primary, request') ~> backup
+      request'' <- (primary, request) ~> backup
       backup `locally` \unwrap -> case unwrap request'' of
         Put key value -> do
           modifyIORef (unwrap backupStateRef) (Map.insert key value)
@@ -74,20 +84,26 @@ kvs (request, (primaryStateRef, backupStateRef)) = do
       return ()
 
   -- process request on primary
-  response <-
-    primary `locally` \unwrap -> case unwrap request' of
-      Put key value -> do
-        modifyIORef (unwrap primaryStateRef) (Map.insert key value)
-        return (Just value)
-      Get key -> do
-        state <- readIORef (unwrap primaryStateRef)
-        return (Map.lookup key state)
+  primary `locally` \unwrap -> case unwrap request of
+    Put key value -> do
+      modifyIORef (unwrap primaryStateRef) (Map.insert key value)
+      return (Just value)
+    Get key -> do
+      state <- readIORef (unwrap primaryStateRef)
+      return (Map.lookup key state)
+
+kvs :: (Request @ "client", a) -> ReplicationStrategy a -> Choreo IO (Response @ "client")
+kvs (request, stateRefs) replicationStrategy = do
+  request' <- (client, request) ~> primary
+
+  -- call the provided replication strategy
+  response <- replicationStrategy (request', stateRefs)
 
   -- send response to client
   (primary, response) ~> client
 
-mainChoreo :: Choreo IO ()
-mainChoreo = do
+primaryBackupChoreo :: Choreo IO ()
+primaryBackupChoreo = do
   primaryStateRef <- primary `locally` \_ -> newIORef (Map.empty :: State)
   backupStateRef <- backup `locally` \_ -> newIORef (Map.empty :: State)
   loop (primaryStateRef, backupStateRef)
@@ -95,10 +111,22 @@ mainChoreo = do
     loop :: (IORef State @ "primary", IORef State @ "backup") -> Choreo IO ()
     loop stateRefs = do
       request <- client `locally` \_ -> readRequest
-      response <- kvs (request, stateRefs)
+      response <- kvs (request, stateRefs) primaryBackupReplicationStrategy
       client `locally` \unwrap -> do putStrLn (show (unwrap response))
       loop stateRefs
 
+noReplicationChoreo :: Choreo IO ()
+noReplicationChoreo = do
+  stateRef <- primary `locally` \_ -> newIORef (Map.empty :: State)
+  loop stateRef
+  where
+    loop :: IORef State @ "primary" -> Choreo IO ()
+    loop stateRef = do
+      request <- client `locally` \_ -> readRequest
+      response <- kvs (request, stateRef) noReplicationReplicationStrategy
+      client `locally` \unwrap -> do putStrLn (show (unwrap response))
+      loop stateRef
+
 main :: IO ()
 main = do
-  runChoreo mainChoreo
+  runChoreo noReplicationChoreo
