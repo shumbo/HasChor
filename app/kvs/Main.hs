@@ -23,12 +23,20 @@ import System.Environment
 client :: Proxy "client"
 client = Proxy
 
-server :: Proxy "server"
-server = Proxy
+primary :: Proxy "primary"
+primary = Proxy
+
+backup :: Proxy "backup"
+backup = Proxy
 
 type State = Map String String
 
 data Request = Put String String | Get String deriving (Show, Read)
+
+isMutation :: Request -> Bool
+isMutation request = case request of
+  Put _ _ -> True
+  _ -> False
 
 type Response = Maybe String
 
@@ -48,30 +56,48 @@ readRequest = do
             ["PUT", k, v] -> Just (Put k v)
             _ -> Nothing
 
-kvs :: (Request @ "client", IORef State @ "server") -> Choreo IO (Response @ "client")
-kvs (request, stateRef) = do
-  request' <- (client, request) ~> server
+kvs :: (Request @ "client", (IORef State @ "primary", IORef State @ "backup")) -> Choreo IO (Response @ "client")
+kvs (request, (primaryStateRef, backupStateRef)) = do
+  request' <- (client, request) ~> primary
+
+  -- relay request to backup if it is mutating (= PUT)
+  m <- primary `locally` \unwrap -> do return $ isMutation (unwrap request')
+  cond (primary, m) \case
+    True -> do
+      request'' <- (primary, request') ~> backup
+      backup `locally` \unwrap -> case unwrap request'' of
+        Put key value -> do
+          modifyIORef (unwrap backupStateRef) (Map.insert key value)
+      backup `locally` \_ -> do putStrLn "handled relayed request"
+      return ()
+    False -> do
+      return ()
+
+  -- process request on primary
   response <-
-    server `locally` \unwrap -> case unwrap request' of
+    primary `locally` \unwrap -> case unwrap request' of
       Put key value -> do
-        modifyIORef (unwrap stateRef) (Map.insert key value)
+        modifyIORef (unwrap primaryStateRef) (Map.insert key value)
         return (Just value)
       Get key -> do
-        state <- readIORef (unwrap stateRef)
+        state <- readIORef (unwrap primaryStateRef)
         return (Map.lookup key state)
-  (server, response) ~> client
+
+  -- send response to client
+  (primary, response) ~> client
 
 mainChoreo :: Choreo IO ()
 mainChoreo = do
-  stateRef <- server `locally` \_ -> newIORef (Map.empty :: State)
-  loop stateRef
+  primaryStateRef <- primary `locally` \_ -> newIORef (Map.empty :: State)
+  backupStateRef <- backup `locally` \_ -> newIORef (Map.empty :: State)
+  loop (primaryStateRef, backupStateRef)
   where
-    loop :: IORef State @ "server" -> Choreo IO ()
-    loop stateRef = do
+    loop :: (IORef State @ "primary", IORef State @ "backup") -> Choreo IO ()
+    loop stateRefs = do
       request <- client `locally` \_ -> readRequest
-      response <- kvs (request, stateRef)
+      response <- kvs (request, stateRefs)
       client `locally` \unwrap -> do putStrLn (show (unwrap response))
-      loop stateRef
+      loop stateRefs
 
 main :: IO ()
 main = do
