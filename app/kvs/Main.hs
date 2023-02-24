@@ -58,6 +58,16 @@ readRequest = do
 
 type ReplicationStrategy a = (Request @ "primary", a) -> Choreo IO (Response @ "primary")
 
+handleRequest :: KnownSymbol loc => Proxy loc -> IORef State @ loc -> Request @ loc -> Choreo IO (Response @ loc)
+handleRequest location state request = do
+  location `locally` \unwrap -> case unwrap request of
+    Put key value -> do
+      modifyIORef (unwrap state) (Map.insert key value)
+      return (Just value)
+    Get key -> do
+      state <- readIORef (unwrap state)
+      return (Map.lookup key state)
+
 noReplicationReplicationStrategy :: ReplicationStrategy (IORef State @ "primary")
 noReplicationReplicationStrategy (request, stateRef) = do
   primary `locally` \unwrap -> case unwrap request of
@@ -74,28 +84,17 @@ primaryBackupReplicationStrategy (request, (primaryStateRef, backupStateRef)) = 
   m <- primary `locally` \unwrap -> do return $ isMutation (unwrap request)
   cond (primary, m) \case
     True -> do
-      request'' <- (primary, request) ~> backup
-      ( backup,
-        \unwrap -> case unwrap request'' of
-          Put key value -> do
-            modifyIORef (unwrap backupStateRef) (Map.insert key value)
-            return (Just value)
-        )
-        ~~> primary
+      request' <- (primary, request) ~> backup
+      ack <- handleRequest backup backupStateRef request'
       backup `locally` \_ -> do putStrLn "handled relayed request"
+      (backup, ack) ~> primary
       primary `locally` \_ -> do putStrLn "received ack from backup"
       return ()
     False -> do
       return ()
 
   -- process request on primary
-  primary `locally` \unwrap -> case unwrap request of
-    Put key value -> do
-      modifyIORef (unwrap primaryStateRef) (Map.insert key value)
-      return (Just value)
-    Get key -> do
-      state <- readIORef (unwrap primaryStateRef)
-      return (Map.lookup key state)
+  handleRequest primary primaryStateRef request
 
 kvs :: (Request @ "client", a) -> ReplicationStrategy a -> Choreo IO (Response @ "client")
 kvs (request, stateRefs) replicationStrategy = do
