@@ -39,14 +39,14 @@ locs :: LocalConfig -> [LocTm]
 locs = HashMap.keys . locToBuf
 
 runNetworkLocal :: MonadIO m => LocalConfig -> LocTm -> Network m a -> m a
-runNetworkLocal cfg self prog = interpFreer handler prog
+runNetworkLocal cfg self = interpFreer handler
   where
     handler :: MonadIO m => NetworkSig m a -> m a
-    handler (Run m)    = m
+    handler (Run m) = m
     handler (Send a l) = liftIO $ writeChan ((locToBuf cfg ! l) ! self) (show a)
-    handler (Recv l)   = liftIO $ read <$> readChan ((locToBuf cfg ! self) ! l)
-    handler(BCast a)   = mapM_ handler $ fmap (Send a) (locs cfg)
+    handler (Recv l) = liftIO $ read <$> readChan ((locToBuf cfg ! self) ! l)
+    handler (BCast a) = mapM_ handler $ fmap (Send a) (locs cfg)
 
 instance Backend LocalConfig where
+  runNetwork :: MonadIO m => LocalConfig -> LocTm -> Network m a -> m a
   runNetwork = runNetworkLocal
-

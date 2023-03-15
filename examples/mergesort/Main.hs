@@ -7,7 +7,8 @@ module Main where
 import Choreography (runChoreography)
 import Choreography.Choreo
 import Choreography.Location
-import Choreography.Network.Http
+import Choreography.Network.Local
+import Control.Concurrent.Async (async, mapConcurrently_, wait)
 import Data.Proxy
 import Data.Time
 import GHC.TypeLits (KnownSymbol)
@@ -103,16 +104,8 @@ mainChoreo = do
 
 main :: IO ()
 main = do
-  [loc] <- getArgs
-  case loc of
-    "primary" -> runChoreography config mainChoreo "primary"
-    "worker1" -> runChoreography config mainChoreo "worker1"
-    "worker2" -> runChoreography config mainChoreo "worker2"
+  config <- mkLocalConfig locs
+  mapConcurrently_ (runChoreography config mainChoreo) locs
   return ()
   where
-    config =
-      mkHttpConfig
-        [ ("primary", ("localhost", 3000)),
-          ("worker1", ("localhost", 4000)),
-          ("worker2", ("localhost", 5000))
-        ]
+    locs = ["primary", "worker1", "worker2"]

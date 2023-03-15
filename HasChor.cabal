@@ -23,6 +23,7 @@ library
         Choreography.Network.Local
         Control.Monad.Freer
     build-depends:
+        async ^>= 2.2.4,
         base ^>= 4.16.3.0,
         bytestring ^>= 0.11.3.0,
         http-client ^>= 0.7.13.1,
@@ -127,7 +128,8 @@ executable mergesort
         HasChor,
         base ^>= 4.16.3.0,
         time ^>= 1.11.1.1,
-        containers ^>= 0.6.5.1
+        containers ^>= 0.6.5.1,
+        async ^>= 2.2.4
 
 executable ring-leader
     hs-source-dirs:   examples/ring-leader
