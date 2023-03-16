@@ -13,11 +13,6 @@ import Data.Proxy
 import GHC.TypeLits (KnownSymbol)
 import System.Environment
 
-divide :: [a] -> ([a], [a])
-divide xs = splitAt lhx xs
-  where
-    lhx = length xs `div` 2
-
 primary :: Proxy "primary"
 primary = Proxy
 
@@ -26,10 +21,6 @@ worker1 = Proxy
 
 worker2 :: Proxy "worker2"
 worker2 = Proxy
-
-third (_, _, x, _) = x
-
-fourth (_, _, _, x) = x
 
 data KaratsubaNums = KaratsubaNums
   { splitter :: Integer,
