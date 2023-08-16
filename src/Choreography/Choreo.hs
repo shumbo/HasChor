@@ -5,7 +5,7 @@
 module Choreography.Choreo where
 
 import Choreography.Location
-import Choreography.Network
+import Choreography.Network hiding (BCast)
 import Control.Monad.Freer
 import Data.List
 import Data.Proxy
@@ -36,6 +36,11 @@ data ChoreoSig m a where
        -> a @ l
        -> (a -> Choreo m b)
        -> ChoreoSig m b
+  
+  BCast :: (Show a, Read a, KnownSymbol l)
+      => Proxy l
+      -> a @ l
+      -> ChoreoSig m a
 
 -- | Monad for writing choreographies.
 type Choreo m = Freer (ChoreoSig m)
@@ -48,6 +53,7 @@ runChoreo = interpFreer handler
     handler (Local _ m)  = wrap <$> m unwrap
     handler (Comm _ a _) = return $ (wrap . unwrap) a
     handler (Cond _ a c) = runChoreo $ c (unwrap a)
+    handler (BCast _ v) = return (unwrap v)
 
 -- | Endpoint projection.
 epp :: Choreo m a -> LocTm -> Network m a
@@ -64,6 +70,9 @@ epp c l' = interpFreer handler c
     handler (Cond l a c)
       | toLocTm l == l' = broadcast (unwrap a) >> epp (c (unwrap a)) l'
       | otherwise       = recv (toLocTm l) >>= \x -> epp (c x) l'
+    handler (BCast l v)
+      | toLocTm l == l' = return (unwrap v)
+      | otherwise       = recv (toLocTm l)
 
 -- * Choreo operations
 
@@ -82,6 +91,12 @@ locally l m = toFreer (Local l m)
      -> Proxy l'          -- ^ A receiver's location.
      -> Choreo m (a @ l')
 (~>) (l, a) l' = toFreer (Comm l a l')
+
+bcast :: (Show a, Read a, KnownSymbol l)
+    => (Proxy l, a @ l)
+    -> Choreo m a
+
+bcast (l, v) = toFreer (BCast l v)
 
 -- | Conditionally execute choreographies based on a located value.
 cond :: (Show a, Read a, KnownSymbol l)

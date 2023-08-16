@@ -35,19 +35,32 @@ bookseller = do
   decision <- buyer `locally` \un -> return $ (un price') < budget
 
   -- if the buyer decides to buy the book, the seller sends the delivery date to the buyer
-  cond (buyer, decision) \case
-    True  -> do
-      deliveryDate  <- seller `locally` \un -> return $ deliveryDateOf (un title')
-      deliveryDate' <- (seller, deliveryDate) ~> buyer
 
-      buyer `locally` \un -> do
-        putStrLn $ "The book will be delivered on " ++ show (un deliveryDate')
-        return $ Just (un deliveryDate')
 
-    False -> do
+  b <- bcast (buyer, decision)
+  if b then do
+    deliveryDate  <- seller `locally` \un -> return $ deliveryDateOf (un title')
+    deliveryDate' <- (seller, deliveryDate) ~> buyer
+    buyer `locally` \un -> do
+      putStrLn $ "The book will be delivered on " ++ show (un deliveryDate')
+      return $ Just (un deliveryDate')
+    else do
       buyer `locally` \_ -> do
         putStrLn "The book's price is out of the budget"
         return Nothing
+
+  -- equivalent code using `cond`
+  -- 
+  -- cond (buyer, decision) \b -> if b then do
+  --   deliveryDate  <- seller `locally` \un -> return $ deliveryDateOf (un title')
+  --   deliveryDate' <- (seller, deliveryDate) ~> buyer
+  --   buyer `locally` \un -> do
+  --     putStrLn $ "The book will be delivered on " ++ show (un deliveryDate')
+  --     return $ Just (un deliveryDate')
+  --   else do
+  --     buyer `locally` \_ -> do
+  --       putStrLn "The book's price is out of the budget"
+  --       return Nothing
 
 -- `bookseller'` is a simplified version of `bookseller` that utilizes `~~>`
 bookseller' :: Choreo IO (Maybe Day @ "buyer")
