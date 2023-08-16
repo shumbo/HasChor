@@ -14,6 +14,7 @@ module Choreography (
   locally,
   (~>),
   (~~>),
+  bcast,
   cond,
   cond',
 
